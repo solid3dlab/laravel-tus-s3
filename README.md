@@ -2,6 +2,12 @@
 
 First-party Laravel Tus 1.0 server backed by **S3 multipart uploads** (Exoscale SOS / AWS S3). Designed for stateless web pods: no PVC, no shared filesystem, no temporary local upload files.
 
+## Acknowledgments
+
+This package was inspired by [arthurpatriot/laravel-tus](https://github.com/arthurpatriot/laravel-tus). Thank you for the clean Laravel + Uppy Tus integration and protocol shape — it got us shipping quickly.
+
+We needed a different storage model for production: durable multipart state in PostgreSQL, parts written directly to S3-compatible object storage, and web pods that stay fully stateless across rolling deploys. The upstream package appends chunks on a local filesystem, which does not survive pod replacement without shared disk. This package keeps a familiar Tus/Uppy surface while replacing that filesystem backend with S3 multipart uploads.
+
 ## Protocol subset
 
 | Method | Purpose |
