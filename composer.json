@@ -1,0 +1,49 @@
+{
+    "name": "solid3d/laravel-tus-s3",
+    "description": "First-party Laravel Tus 1.0 server backed by S3 multipart uploads",
+    "keywords": ["laravel", "tus", "s3", "multipart", "uppy"],
+    "license": "MIT",
+    "require": {
+        "php": "^8.3",
+        "illuminate/contracts": "^11.0||^12.0||^13.0",
+        "spatie/laravel-package-tools": "^1.16"
+    },
+    "require-dev": {
+        "laravel/pint": "^1.14",
+        "orchestra/testbench": "^9.0.0||^10.0.0||^11.0.0",
+        "pestphp/pest": "^4.0",
+        "pestphp/pest-plugin-laravel": "^4.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Solid3d\\LaravelTusS3\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Solid3d\\LaravelTusS3\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/pest",
+        "format": "vendor/bin/pint"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Solid3d\\LaravelTusS3\\LaravelTusS3ServiceProvider"
+            ],
+            "aliases": {
+                "Tus": "Solid3d\\LaravelTusS3\\Facades\\Tus"
+            }
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
