@@ -18,9 +18,33 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Build changelog from conventional commits
+        id: changelog
+        uses: mikepenz/release-changelog-builder-action@v6.2.3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          mode: COMMIT
+          configuration: ".github/release-changelog-config.json"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           name: ${{ github.ref_name }}
-          generate_release_notes: true
+          body: ${{ steps.changelog.outputs.changelog }}
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+      - name: Update Changelog
+        if: ${{ !contains(github.ref_name, '-') }}
+        uses: stefanzweifel/changelog-updater-action@v1.12.0
+        with:
+          latest-version: ${{ github.ref_name }}
+          release-notes: ${{ steps.changelog.outputs.changelog }}
+
+      - name: Commit updated CHANGELOG
+        if: ${{ !contains(github.ref_name, '-') }}
+        uses: stefanzweifel/git-auto-commit-action@v7.1.0
+        with:
+          branch: main
+          commit_message: "docs: update CHANGELOG"
+          file_pattern: CHANGELOG.md
