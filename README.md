@@ -1,6 +1,11 @@
 # solid3d/laravel-tus-s3
 
+[![Run Tests](https://github.com/solid3dlab/laravel-tus-s3/actions/workflows/run-tests.yml/badge.svg)](https://github.com/solid3dlab/laravel-tus-s3/actions/workflows/run-tests.yml)
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/solid3d/laravel-tus-s3.svg?style=flat-square)](https://packagist.org/packages/solid3d/laravel-tus-s3)
+
 First-party Laravel Tus 1.0 server backed by **S3 multipart uploads** (Exoscale SOS / AWS S3). Designed for stateless web pods: no PVC, no shared filesystem, no temporary local upload files.
+
+Requires PHP 8.5+ and Laravel 13.
 
 ## Acknowledgments
 
