@@ -1,6 +1,6 @@
 {
     "name": "solid3d/laravel-tus-s3",
-    "description": "First-party Laravel Tus 1.0 server backed by S3 multipart uploads",
+    "description": "Laravel TUS S3 — Tus 1.0 server backed by S3 multipart uploads",
     "keywords": ["laravel", "tus", "s3", "multipart", "uppy"],
     "license": "MIT",
     "require": {

@@ -1,17 +1,11 @@
-# solid3d/laravel-tus-s3
+# Laravel TUS S3
 
 [![Run Tests](https://github.com/solid3dlab/laravel-tus-s3/actions/workflows/run-tests.yml/badge.svg)](https://github.com/solid3dlab/laravel-tus-s3/actions/workflows/run-tests.yml)
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/solid3d/laravel-tus-s3.svg?style=flat-square)](https://packagist.org/packages/solid3d/laravel-tus-s3)
 
-First-party Laravel Tus 1.0 server backed by **S3 multipart uploads** (Exoscale SOS / AWS S3). Designed for stateless web pods: no PVC, no shared filesystem, no temporary local upload files.
+Laravel Tus 1.0 server backed by **S3 multipart uploads**. Designed for stateless web pods: no PVC, no shared filesystem, no temporary local upload files.
 
 Requires PHP 8.5+ and Laravel 13.
-
-## Acknowledgments
-
-This package was inspired by [arthurpatriot/laravel-tus](https://github.com/arthurpatriot/laravel-tus). Thank you for the clean Laravel + Uppy Tus integration and protocol shape — it got us shipping quickly.
-
-We needed a different storage model for production: durable multipart state in PostgreSQL, parts written directly to S3-compatible object storage, and web pods that stay fully stateless across rolling deploys. The upstream package appends chunks on a local filesystem, which does not survive pod replacement without shared disk. This package keeps a familiar Tus/Uppy surface while replacing that filesystem backend with S3 multipart uploads.
 
 ## Protocol subset
 
@@ -39,7 +33,7 @@ HTTP (TusUploadController)
 ```
 
 - Object keys are **always** generated server-side under `tus.temporary_prefix` (default `tus/tmp/{ulid}`).
-- The Laravel disk `root` (`AWS_ROOT` = `s` / `p`) is applied by Flysystem / `S3KeyResolver` — clients cannot choose bucket or key.
+- The Laravel disk `root` is applied by Flysystem / `S3KeyResolver` — clients cannot choose bucket or key.
 - PATCH takes a short row lock, uploads the part outside the transaction, then commits ETag/offset atomically.
 - If S3 succeeds but the DB update fails, the next PATCH reconciles via `ListParts`.
 
@@ -52,8 +46,7 @@ HTTP (TusUploadController)
 | `TUS_UPLOAD_EXPIRATION` | `60` | Minutes |
 | `TUS_PATH` | `tus` | Route prefix |
 | `TUS_MIN_PART_SIZE` | `5242880` | S3 non-final part minimum (5 MiB) |
-| `TUS_MAX_PART_BYTES` | chunk size | Bounds checksum buffering |
-| `FILE_LIBRARY_CHUNK_SIZE_BYTES` | `5242880` | Uppy `chunkSize` — must be ≥ 5 MiB |
+| `TUS_MAX_PART_BYTES` | `5242880` | Bounds checksum buffering; keep Uppy `chunkSize` ≤ this |
 
 Publish config (optional):
 
@@ -76,7 +69,7 @@ php artisan vendor:publish --tag=tus-config
 php artisan tus:prune   # abort expired multipart uploads; delete stale rows
 ```
 
-Schedule hourly (already wired in Relay). Safe to run repeatedly.
+Schedule hourly. Safe to run repeatedly.
 
 ### Required S3 permissions
 
@@ -88,11 +81,9 @@ Schedule hourly (already wired in Relay). Safe to run repeatedly.
 - `s3:DeleteObject`
 - `s3:GetObject` (finalization streams the temp object)
 
-Scope keys to `{AWS_ROOT}/tus/tmp/*`.
+Scope keys to `{disk-root}/tus/tmp/*`.
 
 ## Events
-
-Compatible with Relay listeners:
 
 - `Solid3d\LaravelTusS3\Events\FileUploadCreated` (`$tusFile`)
 - `Solid3d\LaravelTusS3\Events\FileUploadFinished` (`$tusFile`)
@@ -101,15 +92,4 @@ Compatible with Relay listeners:
 
 ## Finalization note
 
-Prefer streaming the completed temporary object (`Storage::readStream`). If a downstream library requires a local path, spool with a hard byte bound (Relay’s `LocalFile::pathOrSpool`) and delete both the spool and the S3 temp object afterward.
-
-## Releasing
-
-Push a semver tag — CI creates the GitHub Release (with generated notes), then updates `CHANGELOG.md`. Packagist picks up the tag via its GitHub webhook.
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-Prerelease tags with a hyphen (e.g. `v1.1.0-beta.1`) are marked as prereleases.
+Prefer streaming the completed temporary object (`Storage::readStream`). If a downstream library requires a local path, spool with a hard byte bound and delete both the spool and the S3 temp object afterward.

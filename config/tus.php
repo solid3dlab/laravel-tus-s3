@@ -83,11 +83,11 @@ return [
     |
     | Non-final parts must be at least min_part_size (S3 requires 5 MiB).
     | max_part_bytes bounds in-memory/php://temp buffering for checksums.
-    | Configure Uppy chunkSize >= min_part_size (Relay default: 5_242_880).
+    | Configure Uppy chunkSize >= min_part_size (default: 5_242_880).
     |
     */
     'min_part_size' => (int) env('TUS_MIN_PART_SIZE', 5_242_880),
-    'max_part_bytes' => (int) env('TUS_MAX_PART_BYTES', env('FILE_LIBRARY_CHUNK_SIZE_BYTES', 5_242_880)),
+    'max_part_bytes' => (int) env('TUS_MAX_PART_BYTES', 5_242_880),
 
     /*
     |--------------------------------------------------------------------------
