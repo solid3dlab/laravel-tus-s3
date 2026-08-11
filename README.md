@@ -102,3 +102,14 @@ Compatible with Relay listeners:
 ## Finalization note
 
 Prefer streaming the completed temporary object (`Storage::readStream`). If a downstream library requires a local path, spool with a hard byte bound (Relay’s `LocalFile::pathOrSpool`) and delete both the spool and the S3 temp object afterward.
+
+## Releasing
+
+Push a semver tag — CI creates the GitHub Release (with generated notes), then updates `CHANGELOG.md`. Packagist picks up the tag via its GitHub webhook.
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Prerelease tags with a hyphen (e.g. `v1.1.0-beta.1`) are marked as prereleases.
