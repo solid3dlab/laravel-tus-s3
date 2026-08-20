@@ -88,8 +88,25 @@ Scope keys to `{disk-root}/tus/tmp/*`.
 - `Solid3d\LaravelTusS3\Events\FileUploadCreated` (`$tusFile`)
 - `Solid3d\LaravelTusS3\Events\FileUploadFinished` (`$tusFile`)
 
-`TusFile`: `id`, `path` (relative object key), `disk`, `metadata`.
+`TusFile` exposes `id`, `path` (relative object key), `disk`, and `metadata`. Completed
+uploads can be consumed without handling streams:
 
-## Finalization note
+```php
+public function handle(FileUploadFinished $event): void
+{
+    $fingerprint = $event->tusFile->fingerprint(maximumBytes: 1_073_741_824);
 
-Prefer streaming the completed temporary object (`Storage::readStream`). If a downstream library requires a local path, spool with a hard byte bound and delete both the spool and the S3 temp object afterward.
+    $stored = $event->tusFile->moveTo(
+        disk: 's3',
+        path: "library/{$fingerprint->sha256}.bin",
+    );
+
+    // $stored points to the durable object; the temporary object is gone.
+}
+```
+
+- `fingerprint()` returns the SHA-256 and size in one bounded pass.
+- `moveTo()` uses a storage-native move on the same disk and safely streams between
+  different disks.
+- `delete()` removes a completed temporary upload when the application reuses an
+  existing object.

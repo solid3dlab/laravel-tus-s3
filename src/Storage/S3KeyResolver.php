@@ -53,17 +53,27 @@ final class S3KeyResolver
 
     public function assertSafeRelativeKey(string $relativeKey): void
     {
-        $normalized = str_replace('\\', '/', $relativeKey);
+        $normalized = $this->assertSafeStorageKey($relativeKey);
         $prefix = trim((string) config('tus.temporary_prefix', 'tus/tmp'), '/');
+
+        if (! str_starts_with($normalized, $prefix.'/')) {
+            throw new InvalidArgumentException('Object key is outside the Tus temporary prefix.');
+        }
+    }
+
+    public function assertSafeStorageKey(string $relativeKey): string
+    {
+        $normalized = str_replace('\\', '/', $relativeKey);
 
         if (
             $normalized === ''
             || str_contains($normalized, '..')
             || str_starts_with($normalized, '/')
-            || ! str_starts_with($normalized, $prefix.'/')
         ) {
-            throw new InvalidArgumentException('Object key is outside the Tus temporary prefix.');
+            throw new InvalidArgumentException('Object key must be a safe relative path.');
         }
+
+        return $normalized;
     }
 
     public function bucket(string $disk): string
