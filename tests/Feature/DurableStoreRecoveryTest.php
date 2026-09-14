@@ -82,3 +82,30 @@ it('completes multipart exactly once across duplicate completion attempts', func
     expect($store->append($file->id, 0, $stream, 4))->toBe(4);
     fclose($stream);
 });
+
+it('recovers when the object completed but the database completion commit was lost', function (): void {
+    // Arrange
+    $store = app(TusUploadStore::class);
+    $file = $store->create(4, ['name' => 'a.bin']);
+    $stream = fopen('php://memory', 'r+b');
+    fwrite($stream, 'mesh');
+    rewind($stream);
+    $store->append($file->id, 0, $stream, 4);
+    fclose($stream);
+
+    $upload = TusUpload::query()->findOrFail($file->id);
+    $upload->status = 'uploading';
+    $upload->multipart_upload_id = 'completed-upload-no-longer-exists';
+    $upload->completed_at = null;
+    $upload->save();
+    $store->pullCompleted($file->id);
+
+    // Act
+    $recovered = $store->find($file->id);
+
+    // Assert
+    expect($recovered->id)->toBe($file->id)
+        ->and($upload->fresh()->status->value)->toBe('completed')
+        ->and($upload->fresh()->multipart_upload_id)->toBeNull()
+        ->and($store->pullCompleted($file->id))->not->toBeNull();
+});

@@ -33,7 +33,7 @@ final class S3KeyResolver
     {
         $this->assertSafeRelativeKey($relativeKey);
 
-        $root = trim((string) (config("filesystems.disks.{$disk}.root") ?? ''), '/');
+        ['prefix' => $root] = $this->resolvedDisk($disk);
         $relative = ltrim($relativeKey, '/');
 
         if ($root === '') {
@@ -78,7 +78,8 @@ final class S3KeyResolver
 
     public function bucket(string $disk): string
     {
-        $bucket = (string) (config("filesystems.disks.{$disk}.bucket") ?? '');
+        ['disk' => $baseDisk] = $this->resolvedDisk($disk);
+        $bucket = (string) (config("filesystems.disks.{$baseDisk}.bucket") ?? '');
 
         if ($bucket === '') {
             throw new RuntimeException("Disk [{$disk}] has no bucket configured.");
@@ -89,7 +90,8 @@ final class S3KeyResolver
 
     public function client(string $disk): mixed
     {
-        $adapter = $this->disk($disk);
+        ['disk' => $baseDisk] = $this->resolvedDisk($disk);
+        $adapter = $this->disk($baseDisk);
 
         if (! method_exists($adapter, 'getClient')) {
             throw new RuntimeException("Disk [{$disk}] does not expose an S3 client.");
@@ -98,8 +100,58 @@ final class S3KeyResolver
         return $adapter->getClient();
     }
 
+    public function usesS3(string $disk): bool
+    {
+        ['disk' => $baseDisk] = $this->resolvedDisk($disk);
+
+        return config("filesystems.disks.{$baseDisk}.driver") === 's3'
+            && method_exists($this->disk($baseDisk), 'getClient');
+    }
+
     public function filesystem(string $disk): Filesystem
     {
         return $this->disk($disk);
+    }
+
+    /**
+     * @return array{disk: string, prefix: string}
+     */
+    private function resolvedDisk(string $disk): array
+    {
+        $seen = [];
+        $prefixes = [];
+
+        while (config("filesystems.disks.{$disk}.driver") === 'scoped') {
+            if (isset($seen[$disk])) {
+                throw new RuntimeException('Scoped filesystem disks contain a circular reference.');
+            }
+
+            $seen[$disk] = true;
+            $prefix = trim((string) config("filesystems.disks.{$disk}.prefix"), '/');
+
+            if ($prefix !== '') {
+                $prefixes[] = $this->assertSafeStorageKey($prefix);
+            }
+
+            $parent = config("filesystems.disks.{$disk}.disk");
+
+            if (! is_string($parent) || $parent === '') {
+                throw new RuntimeException("Scoped disk [{$disk}] has no parent disk configured.");
+            }
+
+            $disk = $parent;
+        }
+
+        $root = trim((string) config("filesystems.disks.{$disk}.root"), '/');
+        $prefixes = array_reverse($prefixes);
+
+        if ($root !== '') {
+            array_unshift($prefixes, $this->assertSafeStorageKey($root));
+        }
+
+        return [
+            'disk' => $disk,
+            'prefix' => implode('/', $prefixes),
+        ];
     }
 }

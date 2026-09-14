@@ -44,6 +44,8 @@ abstract class TestCase extends Orchestra
             $table->string('patch_lock_owner', 64)->nullable();
             $table->timestamp('patch_lock_at')->nullable();
             $table->timestamp('completed_at')->nullable();
+            $table->string('owner_type')->nullable();
+            $table->string('owner_id')->nullable();
             $table->timestamps();
         });
     }

@@ -11,6 +11,7 @@ use Illuminate\Support\Str;
 use Solid3d\LaravelTusS3\Contracts\MultipartUploader;
 use Solid3d\LaravelTusS3\Contracts\TusUploadStore;
 use Solid3d\LaravelTusS3\Domain\CompletedPart;
+use Solid3d\LaravelTusS3\Domain\UploadOwner;
 use Solid3d\LaravelTusS3\Enums\UploadStatus;
 use Solid3d\LaravelTusS3\Exceptions\ChecksumAlgorithmMismatchException;
 use Solid3d\LaravelTusS3\Exceptions\ChecksumMismatchException;
@@ -25,13 +26,19 @@ use Throwable;
 
 final class DurableTusUploadStore implements TusUploadStore
 {
+    /** @var array<string, true> */
+    private array $completed = [];
+
     public function __construct(
         private MultipartUploader $uploader,
         private ObjectKeyGenerator $keys,
     ) {}
 
-    public function create(int $uploadLength, array $metadata): TusFile
-    {
+    public function create(
+        int $uploadLength,
+        array $metadata,
+        ?UploadOwner $owner = null,
+    ): TusFile {
         $disk = (string) config('tus.storage_disk');
         $id = $this->keys->uploadId();
         $objectKey = $this->keys->temporaryKey($id);
@@ -53,6 +60,8 @@ final class DurableTusUploadStore implements TusUploadStore
                 'expires_at' => $expiresAt,
                 'metadata' => $metadata,
                 'parts' => [],
+                'owner_type' => $owner?->type,
+                'owner_id' => $owner?->id,
             ]);
         } catch (Throwable $exception) {
             try {
@@ -69,7 +78,37 @@ final class DurableTusUploadStore implements TusUploadStore
 
     public function find(string $id): TusFile
     {
-        return $this->uploadOrFail($id)->toTusFile();
+        $upload = $this->uploadOrFail($id);
+
+        if ($upload->status === UploadStatus::Uploading) {
+            DB::transaction(function () use ($id): void {
+                $locked = TusUpload::query()->whereKey($id)->lockForUpdate()->first();
+
+                if ($locked !== null && $locked->status === UploadStatus::Uploading) {
+                    $this->reconcileFromStorage($locked);
+                }
+            }, 3);
+
+            $upload->refresh();
+        }
+
+        return $upload->toTusFile();
+    }
+
+    public function owner(string $id): ?UploadOwner
+    {
+        return $this->uploadOrFail($id)->uploadOwner();
+    }
+
+    public function pullCompleted(string $id): ?TusFile
+    {
+        if (! isset($this->completed[$id])) {
+            return null;
+        }
+
+        unset($this->completed[$id]);
+
+        return $this->find($id);
     }
 
     public function offset(string $id): int
@@ -422,7 +461,9 @@ final class DurableTusUploadStore implements TusUploadStore
             );
         }
 
-        DB::transaction(function () use ($id): void {
+        $completedNow = false;
+
+        DB::transaction(function () use ($id, &$completedNow): void {
             $locked = TusUpload::query()->whereKey($id)->lockForUpdate()->first();
 
             if ($locked === null || $locked->status === UploadStatus::Completed) {
@@ -435,7 +476,12 @@ final class DurableTusUploadStore implements TusUploadStore
             $locked->patch_lock_owner = null;
             $locked->patch_lock_at = null;
             $locked->save();
+            $completedNow = true;
         }, 5);
+
+        if ($completedNow) {
+            $this->completed[$id] = true;
+        }
     }
 
     private function completeOnce(TusUpload $upload): void
@@ -464,6 +510,7 @@ final class DurableTusUploadStore implements TusUploadStore
         $upload->completed_at = now();
         $upload->multipart_upload_id = null;
         $upload->save();
+        $this->completed[$upload->id] = true;
     }
 
     private function reconcileFromStorage(TusUpload $upload): void
@@ -479,10 +526,24 @@ final class DurableTusUploadStore implements TusUploadStore
                 $upload->multipart_upload_id,
             );
         } catch (Throwable) {
+            if (
+                $upload->offset === $upload->expected_size
+                && $this->completedObjectExists($upload)
+            ) {
+                $this->markCompletedFromObject($upload);
+            }
+
             return;
         }
 
         if ($remoteParts === []) {
+            if (
+                $upload->offset === $upload->expected_size
+                && $this->completedObjectExists($upload)
+            ) {
+                $this->markCompletedFromObject($upload);
+            }
+
             return;
         }
 
@@ -515,6 +576,26 @@ final class DurableTusUploadStore implements TusUploadStore
             $this->completeOnce($upload);
         } else {
             $upload->save();
+        }
+    }
+
+    private function markCompletedFromObject(TusUpload $upload): void
+    {
+        $upload->status = UploadStatus::Completed;
+        $upload->completed_at ??= now();
+        $upload->multipart_upload_id = null;
+        $upload->patch_lock_owner = null;
+        $upload->patch_lock_at = null;
+        $upload->save();
+        $this->completed[$upload->id] = true;
+    }
+
+    private function completedObjectExists(TusUpload $upload): bool
+    {
+        try {
+            return $this->uploader->objectExists($upload->disk, $upload->object_key);
+        } catch (Throwable) {
+            return false;
         }
     }
 

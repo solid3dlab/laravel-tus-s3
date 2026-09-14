@@ -4,11 +4,12 @@ declare(strict_types=1);
 
 namespace Solid3d\LaravelTusS3;
 
-use Illuminate\Contracts\Filesystem\Filesystem;
-use Illuminate\Support\Facades\Storage;
+use RuntimeException;
+use Solid3d\LaravelTusS3\Auth\AuthenticatedUploadOwnerResolver;
 use Solid3d\LaravelTusS3\Commands\PruneExpiredTusUploadsCommand;
 use Solid3d\LaravelTusS3\Contracts\MultipartUploader;
 use Solid3d\LaravelTusS3\Contracts\TusUploadStore;
+use Solid3d\LaravelTusS3\Contracts\UploadOwnerResolver;
 use Solid3d\LaravelTusS3\Storage\DurableTusUploadStore;
 use Solid3d\LaravelTusS3\Storage\LocalMultipartUploader;
 use Solid3d\LaravelTusS3\Storage\S3KeyResolver;
@@ -24,21 +25,39 @@ class LaravelTusS3ServiceProvider extends PackageServiceProvider
             ->name('laravel-tus-s3')
             ->hasConfigFile('tus')
             ->hasRoute('tus')
-            ->hasMigration('2026_08_11_000001_create_tus_uploads_table')
-            ->runsMigrations()
             ->hasCommand(PruneExpiredTusUploadsCommand::class);
+    }
+
+    public function packageBooted(): void
+    {
+        $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+
+        $this->publishes([
+            __DIR__.'/../config/tus.php' => config_path('tus.php'),
+        ], 'tus-config');
     }
 
     public function packageRegistered(): void
     {
         $this->app->singleton(Tus::class);
         $this->app->singleton(S3KeyResolver::class);
+        $this->app->singleton(UploadOwnerResolver::class, function ($app): UploadOwnerResolver {
+            $resolver = $app->make((string) config(
+                'tus.ownership.resolver',
+                AuthenticatedUploadOwnerResolver::class,
+            ));
+
+            if (! $resolver instanceof UploadOwnerResolver) {
+                throw new RuntimeException('The configured Tus owner resolver is invalid.');
+            }
+
+            return $resolver;
+        });
 
         $this->app->singleton(MultipartUploader::class, function ($app): MultipartUploader {
             $diskName = (string) config('tus.storage_disk');
-            $disk = Storage::disk($diskName);
 
-            if ($this->isS3Disk($disk, $diskName)) {
+            if ($this->isS3Disk($diskName)) {
                 return $app->make(S3MultipartUploader::class);
             }
 
@@ -48,13 +67,8 @@ class LaravelTusS3ServiceProvider extends PackageServiceProvider
         $this->app->singleton(TusUploadStore::class, DurableTusUploadStore::class);
     }
 
-    private function isS3Disk(Filesystem $disk, string $diskName): bool
+    private function isS3Disk(string $diskName): bool
     {
-        if (config("filesystems.disks.{$diskName}.driver") !== 's3') {
-            return false;
-        }
-
-        // Storage::fake('s3') replaces the disk with a local adapter that has no client.
-        return method_exists($disk, 'getClient');
+        return $this->app->make(S3KeyResolver::class)->usesS3($diskName);
     }
 }

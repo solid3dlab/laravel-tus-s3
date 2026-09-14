@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Solid3d\LaravelTusS3\Contracts;
 
+use Solid3d\LaravelTusS3\Domain\UploadOwner;
 use Solid3d\LaravelTusS3\Helpers\TusFile;
 
 interface TusUploadStore
@@ -11,9 +12,17 @@ interface TusUploadStore
     /**
      * @param  array<string, string>  $metadata
      */
-    public function create(int $uploadLength, array $metadata): TusFile;
+    public function create(
+        int $uploadLength,
+        array $metadata,
+        ?UploadOwner $owner = null,
+    ): TusFile;
 
     public function find(string $id): TusFile;
+
+    public function owner(string $id): ?UploadOwner;
+
+    public function pullCompleted(string $id): ?TusFile;
 
     public function offset(string $id): int;
 

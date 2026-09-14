@@ -103,6 +103,13 @@ final class S3MultipartUploader implements MultipartUploader
         return $parts;
     }
 
+    public function objectExists(string $disk, string $objectKey): bool
+    {
+        $this->keys->assertSafeRelativeKey($objectKey);
+
+        return $this->keys->filesystem($disk)->exists($objectKey);
+    }
+
     public function deleteObject(string $disk, string $objectKey): void
     {
         $this->keys->assertSafeRelativeKey($objectKey);

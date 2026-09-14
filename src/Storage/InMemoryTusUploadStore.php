@@ -7,6 +7,7 @@ namespace Solid3d\LaravelTusS3\Storage;
 use DateTimeInterface;
 use Illuminate\Support\Str;
 use Solid3d\LaravelTusS3\Contracts\TusUploadStore;
+use Solid3d\LaravelTusS3\Domain\UploadOwner;
 use Solid3d\LaravelTusS3\Enums\UploadStatus;
 use Solid3d\LaravelTusS3\Exceptions\ChecksumAlgorithmMismatchException;
 use Solid3d\LaravelTusS3\Exceptions\ChecksumMismatchException;
@@ -28,10 +29,16 @@ final class InMemoryTusUploadStore implements TusUploadStore
     /** @var array<string, string> */
     private array $objects = [];
 
+    /** @var array<string, true> */
+    private array $completed = [];
+
     public function __construct(private ObjectKeyGenerator $keys) {}
 
-    public function create(int $uploadLength, array $metadata): TusFile
-    {
+    public function create(
+        int $uploadLength,
+        array $metadata,
+        ?UploadOwner $owner = null,
+    ): TusFile {
         $id = $this->keys->uploadId();
         $objectKey = $this->keys->temporaryKey($id);
         $expirationMinutes = (int) config('tus.upload_expiration');
@@ -47,6 +54,7 @@ final class InMemoryTusUploadStore implements TusUploadStore
             'metadata' => $metadata,
             'body' => '',
             'lock' => null,
+            'owner' => $owner,
         ];
 
         return $this->toFile($id);
@@ -55,6 +63,22 @@ final class InMemoryTusUploadStore implements TusUploadStore
     public function find(string $id): TusFile
     {
         return $this->toFile($id);
+    }
+
+    public function owner(string $id): ?UploadOwner
+    {
+        return $this->require($id)['owner'];
+    }
+
+    public function pullCompleted(string $id): ?TusFile
+    {
+        if (! isset($this->completed[$id])) {
+            return null;
+        }
+
+        unset($this->completed[$id]);
+
+        return $this->find($id);
     }
 
     public function offset(string $id): int
@@ -136,6 +160,7 @@ final class InMemoryTusUploadStore implements TusUploadStore
         if ($upload['offset'] === $upload['expected_size']) {
             $upload['status'] = UploadStatus::Completed;
             $this->objects[$upload['object_key']] = $upload['body'];
+            $this->completed[$id] = true;
         }
 
         return $upload['offset'];

@@ -117,6 +117,13 @@ final class LocalMultipartUploader implements MultipartUploader
         return $parts;
     }
 
+    public function objectExists(string $disk, string $objectKey): bool
+    {
+        $this->keys->assertSafeRelativeKey($objectKey);
+
+        return Storage::disk($disk)->exists($objectKey);
+    }
+
     public function deleteObject(string $disk, string $objectKey): void
     {
         $this->keys->assertSafeRelativeKey($objectKey);

@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Solid3d\LaravelTusS3\Auth\AuthenticatedUploadOwnerResolver;
+
 return [
     /*
     |--------------------------------------------------------------------------
@@ -20,6 +22,22 @@ return [
     |
     */
     'middleware' => ['web'],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Optional upload ownership
+    |--------------------------------------------------------------------------
+    |
+    | Authenticated uploads are bound to their creator. Anonymous uploads stay
+    | anonymous and are accessible through their unguessable Tus URL. Disable
+    | this to restore URL-only access for every upload, or replace the resolver
+    | to support another authentication system.
+    |
+    */
+    'ownership' => [
+        'enabled' => (bool) env('TUS_OWNERSHIP_ENABLED', true),
+        'resolver' => AuthenticatedUploadOwnerResolver::class,
+    ],
 
     /*
     |--------------------------------------------------------------------------

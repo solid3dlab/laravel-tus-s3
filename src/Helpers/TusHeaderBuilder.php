@@ -101,6 +101,26 @@ class TusHeaderBuilder implements Arrayable
         return $this;
     }
 
+    /**
+     * @param  array<string, mixed>  $metadata
+     */
+    public function metadata(array $metadata): static
+    {
+        unset($metadata['size']);
+
+        if ($metadata === []) {
+            return $this;
+        }
+
+        $this->headers['Upload-Metadata'] = collect($metadata)
+            ->map(
+                static fn (mixed $value, string $key): string => $key.' '.base64_encode((string) $value),
+            )
+            ->implode(',');
+
+        return $this;
+    }
+
     public function forOptions(): static
     {
         $this->version()->maxSize()->extensions()->checksumAlgorithm();
@@ -124,6 +144,7 @@ class TusHeaderBuilder implements Arrayable
         $this
             ->length($length)
             ->offset($offset)
+            ->metadata($tusFile->metadata)
             ->expires($expiresAt);
 
         return $this;

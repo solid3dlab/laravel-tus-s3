@@ -34,6 +34,7 @@ HTTP (TusUploadController)
 
 - Object keys are **always** generated server-side under `tus.temporary_prefix` (default `tus/tmp/{ulid}`).
 - The Laravel disk `root` is applied by Flysystem / `S3KeyResolver` — clients cannot choose bucket or key.
+- Native and scoped S3 disks are supported; scoped prefixes and the base disk root are both preserved.
 - PATCH takes a short row lock, uploads the part outside the transaction, then commits ETag/offset atomically.
 - If S3 succeeds but the DB update fails, the next PATCH reconciles via `ListParts`.
 
@@ -45,6 +46,7 @@ HTTP (TusUploadController)
 | `TUS_TEMPORARY_PREFIX` | `tus/tmp` | Relative to disk root |
 | `TUS_UPLOAD_EXPIRATION` | `60` | Minutes |
 | `TUS_PATH` | `tus` | Route prefix |
+| `TUS_OWNERSHIP_ENABLED` | `true` | Bind authenticated uploads to their creator |
 | `TUS_MIN_PART_SIZE` | `5242880` | S3 non-final part minimum (5 MiB) |
 | `TUS_MAX_PART_BYTES` | `5242880` | Bounds checksum buffering; keep Uppy `chunkSize` ≤ this |
 
@@ -53,6 +55,21 @@ Publish config (optional):
 ```bash
 php artisan vendor:publish --tag=tus-config
 ```
+
+## Anonymous and authenticated uploads
+
+Anonymous uploads work without configuration. Their unguessable upload URL acts
+as the resumable upload credential.
+
+When the request has an authenticated Laravel user, the upload is automatically
+bound to that user's class and authentication identifier. Subsequent `HEAD`,
+`PATCH`, and `DELETE` requests must be made by the same user. Applications may
+still add `auth` middleware to `tus.middleware` when anonymous creation should
+be prohibited.
+
+Set `tus.ownership.enabled` to `false` for URL-only access to all uploads. For
+custom token or tenant authentication, implement `UploadOwnerResolver` and set
+its class in `tus.ownership.resolver`.
 
 ## Uppy
 
@@ -88,6 +105,9 @@ Scope keys to `{disk-root}/tus/tmp/*`.
 - `Solid3d\LaravelTusS3\Events\FileUploadCreated` (`$tusFile`)
 - `Solid3d\LaravelTusS3\Events\FileUploadFinished` (`$tusFile`)
 
+`FileUploadFinished` is emitted only for the request that transitions the
+upload to completed; idempotent PATCH retries do not emit it again.
+
 `TusFile` exposes `id`, `path` (relative object key), `disk`, and `metadata`. Completed
 uploads can be consumed without handling streams:
 
@@ -110,3 +130,12 @@ public function handle(FileUploadFinished $event): void
   different disks.
 - `delete()` removes a completed temporary upload when the application reuses an
   existing object.
+
+## S3 integration tests
+
+The normal suite uses local Flysystem fakes. The CI suite also runs the multipart
+flow against MinIO. Run it locally with:
+
+```bash
+TUS_S3_INTEGRATION=1 TUS_S3_ENDPOINT=http://127.0.0.1:9000 vendor/bin/pest
+```

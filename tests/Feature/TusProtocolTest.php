@@ -57,7 +57,8 @@ it('heads the authoritative offset and completes a multi-part upload', function 
     ])
         ->assertOk()
         ->assertHeader('Upload-Offset', '0')
-        ->assertHeader('Upload-Length', '8');
+        ->assertHeader('Upload-Length', '8')
+        ->assertHeader('Upload-Metadata', 'name '.base64_encode('a.bin'));
 
     $this->call('PATCH', (string) $location, server: [
         'HTTP_TUS_RESUMABLE' => '1.0.0',
@@ -109,6 +110,30 @@ it('rejects invalid checksums', function (): void {
     ], content: 'mesh')->assertStatus(460);
 });
 
+it('rejects malformed checksum headers', function (string $checksum): void {
+    // Arrange
+    $location = $this->withHeaders(tusHeaders(4, ['name' => 'a.bin']))
+        ->post('/tus')
+        ->headers
+        ->get('Location');
+
+    // Act
+    $response = $this->call('PATCH', (string) $location, server: [
+        'HTTP_TUS_RESUMABLE' => '1.0.0',
+        'HTTP_UPLOAD_OFFSET' => '0',
+        'HTTP_UPLOAD_CHECKSUM' => $checksum,
+        'CONTENT_TYPE' => 'application/offset+octet-stream',
+        'CONTENT_LENGTH' => 4,
+    ], content: 'mesh');
+
+    // Assert
+    $response->assertBadRequest();
+})->with([
+    'missing digest' => 'sha256',
+    'empty digest' => 'sha256 ',
+    'invalid base64' => 'sha256 ***',
+]);
+
 it('cancels uploads via delete and prunes expired records', function (): void {
     $location = $this->withHeaders(tusHeaders(4, ['name' => 'a.bin']))
         ->post('/tus')
@@ -151,7 +176,38 @@ it('is idempotent for duplicate patch of an already-applied chunk', function ():
     $this->call('PATCH', (string) $location, server: $server, content: 'mesh')->assertNoContent()
         ->assertHeader('Upload-Offset', '4');
 
-    Event::assertDispatchedTimes(FileUploadFinished::class, 2);
+    Event::assertDispatchedTimes(FileUploadFinished::class, 1);
+});
+
+it('recovers and announces completion during head after a lost database commit', function (): void {
+    // Arrange
+    $location = $this->withHeaders(tusHeaders(4, ['name' => 'a.bin']))
+        ->post('/tus')
+        ->headers
+        ->get('Location');
+
+    $this->call('PATCH', (string) $location, server: [
+        'HTTP_TUS_RESUMABLE' => '1.0.0',
+        'HTTP_UPLOAD_OFFSET' => '0',
+        'CONTENT_TYPE' => 'application/offset+octet-stream',
+        'CONTENT_LENGTH' => 4,
+    ], content: 'mesh')->assertNoContent();
+
+    $upload = TusUpload::query()->firstOrFail();
+    $upload->status = 'uploading';
+    $upload->multipart_upload_id = 'completed-upload-no-longer-exists';
+    $upload->completed_at = null;
+    $upload->save();
+    Event::fake([FileUploadFinished::class]);
+
+    // Act
+    $response = $this->call('HEAD', (string) $location, server: [
+        'HTTP_TUS_RESUMABLE' => '1.0.0',
+    ]);
+
+    // Assert
+    $response->assertOk()->assertHeader('Upload-Offset', '4');
+    Event::assertDispatchedTimes(FileUploadFinished::class, 1);
 });
 
 it('cannot escape the environment disk root via object keys', function (): void {
@@ -159,4 +215,21 @@ it('cannot escape the environment disk root via object keys', function (): void 
 
     expect(fn () => app(S3KeyResolver::class)->absoluteKey('local', 'tus/tmp/../../p/secret'))
         ->toThrow(InvalidArgumentException::class);
+});
+
+it('resolves scoped disk prefixes into the absolute s3 key', function (): void {
+    // Arrange
+    config([
+        'filesystems.disks.s3.driver' => 's3',
+        'filesystems.disks.s3.root' => 'environment',
+        'filesystems.disks.assets.driver' => 'scoped',
+        'filesystems.disks.assets.disk' => 's3',
+        'filesystems.disks.assets.prefix' => 'assets',
+    ]);
+
+    // Act
+    $key = app(S3KeyResolver::class)->absoluteKey('assets', 'tus/tmp/upload-id');
+
+    // Assert
+    expect($key)->toBe('environment/assets/tus/tmp/upload-id');
 });

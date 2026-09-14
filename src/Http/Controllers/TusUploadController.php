@@ -7,12 +7,15 @@ namespace Solid3d\LaravelTusS3\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Routing\Controller as BaseController;
+use Solid3d\LaravelTusS3\Auth\TusUploadAccess;
 use Solid3d\LaravelTusS3\Contracts\TusUploadStore;
+use Solid3d\LaravelTusS3\Contracts\UploadOwnerResolver;
 use Solid3d\LaravelTusS3\Events\FileUploadBeforeCreated;
 use Solid3d\LaravelTusS3\Events\FileUploadCreated;
 use Solid3d\LaravelTusS3\Events\FileUploadFinished;
 use Solid3d\LaravelTusS3\Events\FileUploadStarted;
 use Solid3d\LaravelTusS3\Exceptions\FileNotFoundException;
+use Solid3d\LaravelTusS3\Exceptions\InvalidChecksumException;
 use Solid3d\LaravelTusS3\Facades\Tus;
 use Solid3d\LaravelTusS3\Helpers\UploadMetadataParser;
 
@@ -21,6 +24,8 @@ class TusUploadController extends BaseController
     public function __construct(
         private TusUploadStore $store,
         private UploadMetadataParser $metadataParser,
+        private UploadOwnerResolver $ownerResolver,
+        private TusUploadAccess $access,
     ) {}
 
     public function options(): Response
@@ -46,7 +51,10 @@ class TusUploadController extends BaseController
         }
 
         $metadata = $this->metadataParser->parse($request->header('upload-metadata'));
-        $tusFile = $this->store->create($length, $metadata);
+        $owner = (bool) config('tus.ownership.enabled', true)
+            ? $this->ownerResolver->resolve($request)
+            : null;
+        $tusFile = $this->store->create($length, $metadata, $owner);
 
         event(new FileUploadCreated($tusFile));
 
@@ -60,9 +68,16 @@ class TusUploadController extends BaseController
         );
     }
 
-    public function head(string $id): Response
+    public function head(Request $request, string $id): Response
     {
+        $this->access->assertAccessible($request, $id);
         $tusFile = $this->store->find($id);
+        $completed = $this->store->pullCompleted($id);
+
+        if ($completed !== null) {
+            $tusFile = $completed;
+            event(new FileUploadFinished($completed));
+        }
 
         return response(
             status: 200,
@@ -77,6 +92,7 @@ class TusUploadController extends BaseController
 
     public function patch(Request $request, string $id): Response
     {
+        $this->access->assertAccessible($request, $id);
         $tusFile = $this->store->find($id);
         $expectedOffset = (int) $request->header('upload-offset', -1);
         $length = (int) $request->header('content-length', 0);
@@ -98,10 +114,10 @@ class TusUploadController extends BaseController
         $body = $request->getContent(true);
         $offset = $this->store->append($id, $expectedOffset, $body, $length, $algorithm, $hash);
 
-        $fresh = $this->store->find($id);
+        $completed = $this->store->pullCompleted($id);
 
-        if ($offset === $this->store->expectedLength($id)) {
-            event(new FileUploadFinished($fresh));
+        if ($completed !== null) {
+            event(new FileUploadFinished($completed));
         }
 
         return response(
@@ -112,13 +128,14 @@ class TusUploadController extends BaseController
         );
     }
 
-    public function delete(string $id): Response
+    public function delete(Request $request, string $id): Response
     {
         if (! Tus::extensionIsActive('termination')) {
             return response(status: 404, headers: Tus::headers()->default()->toArray());
         }
 
         try {
+            $this->access->assertAccessible($request, $id);
             $deleted = $this->store->abort($id);
         } catch (FileNotFoundException) {
             $deleted = false;
@@ -142,7 +159,7 @@ class TusUploadController extends BaseController
         $parts = explode(' ', (string) $request->header('upload-checksum'), 2);
 
         if (count($parts) !== 2) {
-            return [null, null];
+            throw new InvalidChecksumException;
         }
 
         return [$parts[0], $parts[1]];

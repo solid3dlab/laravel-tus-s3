@@ -8,6 +8,7 @@ use Closure;
 use Illuminate\Http\Request;
 use Solid3d\LaravelTusS3\Exceptions\ChecksumAlgorithmMismatchException;
 use Solid3d\LaravelTusS3\Exceptions\ChecksumMismatchException;
+use Solid3d\LaravelTusS3\Exceptions\InvalidChecksumException;
 use Solid3d\LaravelTusS3\Facades\Tus;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -26,28 +27,26 @@ class ValidateChecksumMiddleware
             return $next($request);
         }
 
-        // PATCH bodies are validated in the store to avoid double-reading streams.
-        if ($request->isMethod('PATCH')) {
-            $parts = explode(' ', (string) $request->header('upload-checksum'), 2);
-            $algorithm = $parts[0] ?? '';
-
-            if (! in_array($algorithm, (array) config('tus.checksum_algorithm'), true)) {
-                throw new ChecksumAlgorithmMismatchException;
-            }
-
-            return $next($request);
-        }
-
         $parts = explode(' ', (string) $request->header('upload-checksum'), 2);
 
-        if (count($parts) !== 2) {
-            throw new ChecksumMismatchException;
+        if (
+            count($parts) !== 2
+            || $parts[0] === ''
+            || $parts[1] === ''
+            || base64_decode($parts[1], true) === false
+        ) {
+            throw new InvalidChecksumException;
         }
 
         [$algorithm, $hash] = $parts;
 
         if (! in_array($algorithm, (array) config('tus.checksum_algorithm'), true)) {
             throw new ChecksumAlgorithmMismatchException;
+        }
+
+        // PATCH bodies are validated in the store to avoid double-reading streams.
+        if ($request->isMethod('PATCH')) {
+            return $next($request);
         }
 
         if (! Tus::isValidChecksum($algorithm, $hash, $request->getContent())) {

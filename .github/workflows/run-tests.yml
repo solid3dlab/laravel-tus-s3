@@ -42,5 +42,16 @@ jobs:
       - name: List Installed Dependencies
         run: composer show -D
 
+      - name: Start MinIO
+        run: |
+          docker run --detach --name minio \
+            --publish 9000:9000 \
+            --env MINIO_ROOT_USER=minioadmin \
+            --env MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio:latest server /data
+          timeout 30 bash -c 'until curl --fail --silent http://127.0.0.1:9000/minio/health/live; do sleep 1; done'
+
       - name: Execute tests
         run: vendor/bin/pest --enforce-time-limit --fail-on-risky --no-coverage
+        env:
+          TUS_S3_INTEGRATION: "1"

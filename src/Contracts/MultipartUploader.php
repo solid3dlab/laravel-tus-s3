@@ -44,5 +44,7 @@ interface MultipartUploader
      */
     public function listParts(string $disk, string $objectKey, string $uploadId): array;
 
+    public function objectExists(string $disk, string $objectKey): bool;
+
     public function deleteObject(string $disk, string $objectKey): void;
 }

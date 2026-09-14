@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Solid3d\LaravelTusS3\Models;
 
+use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
 use Solid3d\LaravelTusS3\Domain\CompletedPart;
+use Solid3d\LaravelTusS3\Domain\UploadOwner;
 use Solid3d\LaravelTusS3\Enums\UploadStatus;
 use Solid3d\LaravelTusS3\Helpers\TusFile;
 
@@ -25,6 +27,8 @@ use Solid3d\LaravelTusS3\Helpers\TusFile;
  * @property string|null $patch_lock_owner
  * @property Carbon|null $patch_lock_at
  * @property Carbon|null $completed_at
+ * @property string|null $owner_type
+ * @property string|null $owner_id
  */
 class TusUpload extends Model
 {
@@ -49,6 +53,8 @@ class TusUpload extends Model
         'patch_lock_owner',
         'patch_lock_at',
         'completed_at',
+        'owner_type',
+        'owner_id',
     ];
 
     protected function casts(): array
@@ -77,6 +83,23 @@ class TusUpload extends Model
             ],
             disk: $this->disk,
         );
+    }
+
+    public function uploadOwner(): ?UploadOwner
+    {
+        if ($this->owner_type === null || $this->owner_id === null) {
+            return null;
+        }
+
+        return new UploadOwner($this->owner_type, $this->owner_id);
+    }
+
+    public function isOwnedBy(Authenticatable $owner): bool
+    {
+        return $this->uploadOwner()?->matches(new UploadOwner(
+            type: $owner::class,
+            id: (string) $owner->getAuthIdentifier(),
+        )) ?? false;
     }
 
     /**
