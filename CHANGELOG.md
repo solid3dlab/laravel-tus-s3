@@ -19,3 +19,4 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 - Recover when S3 completed an object before the database completion commit.
 - Emit `FileUploadFinished` only once for idempotent PATCH retries.
 - Publish configuration through the documented `tus-config` tag without publishing duplicate migrations.
+- Run S3 integration CI against `pgsty/minio` after Docker Hub denied `minio/minio:latest`.

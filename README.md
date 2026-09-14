@@ -134,8 +134,15 @@ public function handle(FileUploadFinished $event): void
 ## S3 integration tests
 
 The normal suite uses local Flysystem fakes. The CI suite also runs the multipart
-flow against MinIO. Run it locally with:
+flow against MinIO. Official `minio/minio` images are no longer publicly pullable,
+so CI and local integration use the community image `pgsty/minio`.
 
 ```bash
+docker run --detach --name minio \
+  --publish 9000:9000 \
+  --env MINIO_ROOT_USER=minioadmin \
+  --env MINIO_ROOT_PASSWORD=minioadmin \
+  pgsty/minio:RELEASE.2026-06-18T00-00-00Z server /data
+
 TUS_S3_INTEGRATION=1 TUS_S3_ENDPOINT=http://127.0.0.1:9000 vendor/bin/pest
 ```

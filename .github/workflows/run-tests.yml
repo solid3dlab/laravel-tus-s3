@@ -48,8 +48,9 @@ jobs:
             --publish 9000:9000 \
             --env MINIO_ROOT_USER=minioadmin \
             --env MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio:latest server /data
-          timeout 30 bash -c 'until curl --fail --silent http://127.0.0.1:9000/minio/health/live; do sleep 1; done'
+            pgsty/minio:RELEASE.2026-06-18T00-00-00Z server /data
+          timeout 30 bash -c 'until curl --fail --silent http://127.0.0.1:9000/minio/health/live; do sleep 1; done' \
+            || { docker logs minio; exit 1; }
 
       - name: Execute tests
         run: vendor/bin/pest --enforce-time-limit --fail-on-risky --no-coverage
