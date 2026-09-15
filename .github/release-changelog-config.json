@@ -19,9 +19,10 @@
   "ignore_labels": ["build", "chore", "ci", "docs", "style", "test", "tests"],
   "label_extractor": [
     {
-      "pattern": "^(build|chore|ci|docs|feat|feature|fix|bugfix|perf|refactor|revert|style|test|tests)(\\([^)]*\\))?(!)?:\\s+",
+      "pattern": "^(build|chore|ci|docs|feat|feature|fix|bugfix|perf|refactor|revert|style|test|tests)(\\([^)]*\\))?(!)?:\\s+.*$",
       "on_property": "title",
-      "target": "$1"
+      "target": "$1",
+      "flags": "gsu"
     }
   ],
   "transformers": [
