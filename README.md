@@ -1,94 +1,49 @@
 # Laravel TUS S3
 
-[![Run Tests](https://github.com/solid3dlab/laravel-tus-s3/actions/workflows/run-tests.yml/badge.svg)](https://github.com/solid3dlab/laravel-tus-s3/actions/workflows/run-tests.yml)
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/solid3d/laravel-tus-s3.svg?style=flat-square)](https://packagist.org/packages/solid3d/laravel-tus-s3)
+[![GitHub Tests Action Status](https://github.com/solid3dlab/laravel-tus-s3/actions/workflows/run-tests.yml/badge.svg)](https://github.com/solid3dlab/laravel-tus-s3/actions/workflows/run-tests.yml)
+[![GitHub Code Style Action Status](https://github.com/solid3dlab/laravel-tus-s3/actions/workflows/php-code-style.yml/badge.svg)](https://github.com/solid3dlab/laravel-tus-s3/actions/workflows/php-code-style.yml)
+[![Total Downloads](https://img.shields.io/packagist/dt/solid3d/laravel-tus-s3.svg?style=flat-square)](https://packagist.org/packages/solid3d/laravel-tus-s3)
 
-Laravel Tus 1.0 server backed by **S3 multipart uploads**. Designed for stateless web pods: no PVC, no shared filesystem, no temporary local upload files.
+Tus 1.0 server for Laravel, backed by S3 multipart uploads. Built for stateless web pods: no shared filesystem and no local temp files.
 
 Requires PHP 8.5+ and Laravel 13.
 
-## Protocol subset
+## Installation
 
-| Method | Purpose |
-|--------|---------|
-| `OPTIONS` | Capability discovery |
-| `POST` | Create upload (`creation`) |
-| `HEAD` | Authoritative `Upload-Offset` / length / expiry |
-| `PATCH` | Upload next chunk |
-| `DELETE` | Abort (`termination`) |
+You can install the package via Composer:
 
-Extensions: `creation`, `expiration`, `checksum`, `termination`.
-
-Not implemented: `concatenation`, `creation-with-upload`.
-
-## Architecture
-
-```
-HTTP (TusUploadController)
-  → TusUploadStore (DurableTusUploadStore)
-      → PostgreSQL (tus_uploads: offset, parts, multipart id, expiry)
-      → MultipartUploader
-           → S3MultipartUploader   (production)
-           → LocalMultipartUploader (local / Storage::fake)
+```bash
+composer require solid3d/laravel-tus-s3
 ```
 
-- Object keys are **always** generated server-side under `tus.temporary_prefix` (default `tus/tmp/{ulid}`).
-- The Laravel disk `root` is applied by Flysystem / `S3KeyResolver` — clients cannot choose bucket or key.
-- Native and scoped S3 disks are supported; scoped prefixes and the base disk root are both preserved.
-- PATCH takes a short row lock, uploads the part outside the transaction, then commits ETag/offset atomically.
-- If S3 succeeds but the DB update fails, the next PATCH reconciles via `ListParts`.
+Run the migrations (creates `tus_uploads`):
 
-## Configuration
+```bash
+php artisan migrate
+```
 
-| Env | Default | Notes |
-|-----|---------|-------|
-| `TUS_STORAGE_DISK` | `FILESYSTEM_DISK` / `s3` | Disk for temporary objects |
-| `TUS_TEMPORARY_PREFIX` | `tus/tmp` | Relative to disk root |
-| `TUS_UPLOAD_EXPIRATION` | `60` | Minutes |
-| `TUS_PATH` | `tus` | Route prefix |
-| `TUS_OWNERSHIP_ENABLED` | `true` | Bind authenticated uploads to their creator |
-| `TUS_MIN_PART_SIZE` | `5242880` | S3 non-final part minimum (5 MiB) |
-| `TUS_MAX_PART_BYTES` | `5242880` | Bounds checksum buffering; keep Uppy `chunkSize` ≤ this |
-
-Publish config (optional):
+Optionally publish the config file:
 
 ```bash
 php artisan vendor:publish --tag=tus-config
 ```
 
-## Anonymous and authenticated uploads
+Point `TUS_STORAGE_DISK` at an S3-compatible Laravel disk. Object keys are generated server-side under `temporary_prefix` — clients cannot choose the bucket or key.
 
-Anonymous uploads work without configuration. Their unguessable upload URL acts
-as the resumable upload credential.
+| Env | Default | Notes |
+|-----|---------|-------|
+| `TUS_STORAGE_DISK` | `FILESYSTEM_DISK` / `s3` | Disk for temporary objects |
+| `TUS_TEMPORARY_PREFIX` | `tus/tmp` | Relative to the disk root |
+| `TUS_UPLOAD_EXPIRATION` | `60` | Minutes |
+| `TUS_PATH` | `tus` | Route prefix |
+| `TUS_OWNERSHIP_ENABLED` | `true` | Bind authenticated uploads to their creator |
+| `TUS_MIN_PART_SIZE` | `5242880` | S3 non-final part minimum (5 MiB) |
+| `TUS_MAX_PART_BYTES` | `5242880` | Keep Uppy `chunkSize` ≤ this |
 
-When the request has an authenticated Laravel user, the upload is automatically
-bound to that user's class and authentication identifier. Subsequent `HEAD`,
-`PATCH`, and `DELETE` requests must be made by the same user. Applications may
-still add `auth` middleware to `tus.middleware` when anonymous creation should
-be prohibited.
+Routes are registered automatically at `/tus`. Default middleware is `web`; add `auth` (or replace the stack) via `tus.middleware` when anonymous creation should be prohibited.
 
-Set `tus.ownership.enabled` to `false` for URL-only access to all uploads. For
-custom token or tenant authentication, implement `UploadOwnerResolver` and set
-its class in `tus.ownership.resolver`.
-
-## Uppy
-
-```ts
-.use(Tus, {
-  endpoint: '/tus',
-  chunkSize: 5_242_880, // >= 5 MiB for S3 multipart
-})
-```
-
-## Operations
-
-```bash
-php artisan tus:prune   # abort expired multipart uploads; delete stale rows
-```
-
-Schedule hourly. Safe to run repeatedly.
-
-### Required S3 permissions
+### S3 permissions
 
 - `s3:CreateMultipartUpload`
 - `s3:UploadPart`
@@ -98,44 +53,73 @@ Schedule hourly. Safe to run repeatedly.
 - `s3:DeleteObject`
 - `s3:GetObject` (finalization streams the temp object)
 
-Scope keys to `{disk-root}/tus/tmp/*`.
+Scope keys to `{disk-root}/tus/tmp/*`. Native and scoped S3 disks are supported.
 
-## Events
+## Usage
 
-- `Solid3d\LaravelTusS3\Events\FileUploadCreated` (`$tusFile`)
-- `Solid3d\LaravelTusS3\Events\FileUploadFinished` (`$tusFile`)
+### Uppy
 
-`FileUploadFinished` is emitted only for the request that transitions the
-upload to completed; idempotent PATCH retries do not emit it again.
+```ts
+.use(Tus, {
+  endpoint: '/tus',
+  chunkSize: 5_242_880, // >= 5 MiB for S3 multipart
+})
+```
 
-`TusFile` exposes `id`, `path` (relative object key), `disk`, and `metadata`. Completed
-uploads can be consumed without handling streams:
+### Completed uploads
+
+Listen for `FileUploadFinished` (`$event->tusFile`). It fires only for the request that actually completes the upload.
 
 ```php
+use Solid3d\LaravelTusS3\Events\FileUploadFinished;
+
 public function handle(FileUploadFinished $event): void
 {
     $fingerprint = $event->tusFile->fingerprint(maximumBytes: 1_073_741_824);
 
-    $stored = $event->tusFile->moveTo(
+    $event->tusFile->moveTo(
         disk: 's3',
         path: "library/{$fingerprint->sha256}.bin",
     );
-
-    // $stored points to the durable object; the temporary object is gone.
 }
 ```
 
-- `fingerprint()` returns the SHA-256 and size in one bounded pass.
-- `moveTo()` uses a storage-native move on the same disk and safely streams between
-  different disks.
-- `delete()` removes a completed temporary upload when the application reuses an
-  existing object.
+`TusFile` also exposes `id`, `path`, `disk`, and `metadata`. Use `delete()` when you keep an existing object instead of moving the temp file.
 
-## S3 integration tests
+`FileUploadCreated` is available if you need to react when an upload is created.
 
-The normal suite uses local Flysystem fakes. The CI suite also runs the multipart
-flow against MinIO. Official `minio/minio` images are no longer publicly pullable,
-so CI and local integration use the community image `pgsty/minio`.
+### Ownership
+
+Anonymous uploads work out of the box — the unguessable upload URL is the credential.
+
+When a Laravel user is authenticated, the upload is bound to that user. Later `HEAD` / `PATCH` / `DELETE` must come from the same user. Set `tus.ownership.enabled` to `false` for URL-only access, or implement `UploadOwnerResolver` and set `tus.ownership.resolver`.
+
+### Scheduling
+
+```php
+use Illuminate\Support\Facades\Schedule;
+
+Schedule::command('tus:prune')->hourly();
+Schedule::command('tus:dispatch-finished')->everyMinute();
+```
+
+`tus:prune` aborts expired multipart uploads and deletes stale rows. `tus:dispatch-finished` delivers `FileUploadFinished` if a worker died after S3 completed.
+
+## Protocol
+
+Tus 1.0: `OPTIONS`, `POST` (creation), `HEAD`, `PATCH`, `DELETE` (termination).
+
+Extensions: `creation`, `expiration`, `checksum`, `termination`.
+
+Not implemented: `concatenation`, `creation-with-upload`.
+
+## Testing
+
+```bash
+composer test
+```
+
+The default suite uses local Flysystem fakes. To also run S3 multipart tests against MinIO:
 
 ```bash
 docker run --detach --name minio \
@@ -146,3 +130,16 @@ docker run --detach --name minio \
 
 TUS_S3_INTEGRATION=1 TUS_S3_ENDPOINT=http://127.0.0.1:9000 vendor/bin/pest
 ```
+
+## Changelog
+
+Please see [CHANGELOG](CHANGELOG.md) for more information on what has changed recently.
+
+## Credits
+
+- [Oliver Kaufmann](https://github.com/okaufmann)
+- [All Contributors](../../contributors)
+
+## License
+
+The MIT License (MIT).
