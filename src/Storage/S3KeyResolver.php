@@ -108,13 +108,55 @@ final class S3KeyResolver
             && method_exists($this->disk($baseDisk), 'getClient');
     }
 
+    public function baseDisk(string $disk): string
+    {
+        return $this->resolvedDisk($disk)['disk'];
+    }
+
+    /**
+     * True when both disks are views onto the same underlying disk, so a transfer
+     * between them can be a server-side copy instead of a download plus upload.
+     */
+    public function sharesObjectStore(string $source, string $destination): bool
+    {
+        return $this->baseDisk($source) === $this->baseDisk($destination);
+    }
+
+    /**
+     * Whether a transfer may be handed to the shared base disk.
+     *
+     * Restricted to S3 on purpose. Reaching for the base disk by name assumes
+     * that resolving that name yields the same bytes the scoped disk sees, and
+     * that only holds when both views come from the same bucket configuration;
+     * a locally rooted or faked disk can be swapped out from under the scoped
+     * one, and then the copy lands somewhere the caller cannot read. Streaming
+     * a local file is cheap anyway — the saving here is a network round trip.
+     */
+    public function canCopyServerSide(string $source, string $destination): bool
+    {
+        return $this->sharesObjectStore($source, $destination)
+            && $this->usesS3($source);
+    }
+
+    /**
+     * Rewrite a key that is relative to a (possibly scoped) disk into one that is
+     * relative to its base disk, which is the form the base adapter expects.
+     */
+    public function baseRelativeKey(string $disk, string $key): string
+    {
+        $normalized = ltrim($this->assertSafeStorageKey($key), '/');
+        ['scoped_prefix' => $prefix] = $this->resolvedDisk($disk);
+
+        return $prefix === '' ? $normalized : $prefix.'/'.$normalized;
+    }
+
     public function filesystem(string $disk): Filesystem
     {
         return $this->disk($disk);
     }
 
     /**
-     * @return array{disk: string, prefix: string}
+     * @return array{disk: string, prefix: string, scoped_prefix: string}
      */
     private function resolvedDisk(string $disk): array
     {
@@ -144,6 +186,7 @@ final class S3KeyResolver
 
         $root = trim((string) config("filesystems.disks.{$disk}.root"), '/');
         $prefixes = array_reverse($prefixes);
+        $scopedPrefix = implode('/', $prefixes);
 
         if ($root !== '') {
             array_unshift($prefixes, $this->assertSafeStorageKey($root));
@@ -152,6 +195,7 @@ final class S3KeyResolver
         return [
             'disk' => $disk,
             'prefix' => implode('/', $prefixes),
+            'scoped_prefix' => $scopedPrefix,
         ];
     }
 }

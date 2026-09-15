@@ -61,6 +61,17 @@ final class TusFileStorage
             if (! $source->move($file->path, $path)) {
                 throw new RuntimeException('The completed upload could not be moved.');
             }
+        } elseif ($this->keys->canCopyServerSide($file->disk, $disk)) {
+            // Scoped disks over one bucket: let the object store do the copy rather
+            // than pulling every byte down into PHP and pushing it back up.
+            $base = $this->keys->filesystem($this->keys->baseDisk($file->disk));
+
+            if (! $base->move(
+                $this->keys->baseRelativeKey($file->disk, $file->path),
+                $this->keys->baseRelativeKey($disk, $path),
+            )) {
+                throw new RuntimeException('The completed upload could not be moved.');
+            }
         } else {
             $stream = $source->readStream($file->path);
             if (! is_resource($stream)) {
