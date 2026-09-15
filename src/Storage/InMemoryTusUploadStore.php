@@ -70,6 +70,17 @@ final class InMemoryTusUploadStore implements TusUploadStore
         return $this->require($id)['owner'];
     }
 
+    public function isActive(string $id): bool
+    {
+        $upload = $this->uploads[$id] ?? null;
+
+        if ($upload === null || $upload['status']->isTerminal()) {
+            return false;
+        }
+
+        return $upload['expires_at'] === null || ! $upload['expires_at']->isPast();
+    }
+
     public function pullCompleted(string $id): ?TusFile
     {
         if (! isset($this->completed[$id])) {
@@ -79,6 +90,11 @@ final class InMemoryTusUploadStore implements TusUploadStore
         unset($this->completed[$id]);
 
         return $this->find($id);
+    }
+
+    public function unnotifiedCompleted(int $limit = 100): array
+    {
+        return array_slice(array_keys($this->completed), 0, max(1, $limit));
     }
 
     public function offset(string $id): int
@@ -161,6 +177,10 @@ final class InMemoryTusUploadStore implements TusUploadStore
             $upload['status'] = UploadStatus::Completed;
             $this->objects[$upload['object_key']] = $upload['body'];
             $this->completed[$id] = true;
+
+            if ($expectedOffset === 0) {
+                $upload['sha256'] = hash('sha256', $upload['body']);
+            }
         }
 
         return $upload['offset'];
@@ -222,6 +242,7 @@ final class InMemoryTusUploadStore implements TusUploadStore
     private function toFile(string $id): TusFile
     {
         $upload = $this->require($id);
+        $complete = $upload['status'] === UploadStatus::Completed;
 
         return new TusFile(
             id: $id,
@@ -231,6 +252,8 @@ final class InMemoryTusUploadStore implements TusUploadStore
                 'size' => $upload['expected_size'],
             ],
             disk: $upload['disk'],
+            sha256: $complete ? ($upload['sha256'] ?? null) : null,
+            size: $complete && isset($upload['sha256']) ? (int) $upload['expected_size'] : null,
         );
     }
 }

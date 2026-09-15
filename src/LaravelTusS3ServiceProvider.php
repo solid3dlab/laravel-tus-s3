@@ -6,6 +6,7 @@ namespace Solid3d\LaravelTusS3;
 
 use RuntimeException;
 use Solid3d\LaravelTusS3\Auth\AuthenticatedUploadOwnerResolver;
+use Solid3d\LaravelTusS3\Commands\DispatchFinishedTusUploadsCommand;
 use Solid3d\LaravelTusS3\Commands\PruneExpiredTusUploadsCommand;
 use Solid3d\LaravelTusS3\Contracts\MultipartUploader;
 use Solid3d\LaravelTusS3\Contracts\TusUploadStore;
@@ -25,7 +26,10 @@ class LaravelTusS3ServiceProvider extends PackageServiceProvider
             ->name('laravel-tus-s3')
             ->hasConfigFile('tus')
             ->hasRoute('tus')
-            ->hasCommand(PruneExpiredTusUploadsCommand::class);
+            ->hasCommands([
+                PruneExpiredTusUploadsCommand::class,
+                DispatchFinishedTusUploadsCommand::class,
+            ]);
     }
 
     public function packageBooted(): void

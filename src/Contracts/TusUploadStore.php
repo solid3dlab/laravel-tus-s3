@@ -22,7 +22,25 @@ interface TusUploadStore
 
     public function owner(string $id): ?UploadOwner;
 
+    /**
+     * True while the upload can still accept bytes, i.e. it exists and has not
+     * been completed, cancelled or expired.
+     */
+    public function isActive(string $id): bool;
+
+    /**
+     * Claim the completion notification for this upload exactly once, so the
+     * FileUploadFinished event is delivered by whichever worker gets there first.
+     */
     public function pullCompleted(string $id): ?TusFile;
+
+    /**
+     * Uploads that finished but whose completion notification was never claimed,
+     * e.g. because the request that completed them died first.
+     *
+     * @return list<string>
+     */
+    public function unnotifiedCompleted(int $limit = 100): array;
 
     public function offset(string $id): int;
 

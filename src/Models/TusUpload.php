@@ -19,6 +19,7 @@ use Solid3d\LaravelTusS3\Helpers\TusFile;
  * @property string|null $multipart_upload_id
  * @property int $expected_size
  * @property int $offset
+ * @property string|null $sha256
  * @property int $next_part_number
  * @property UploadStatus $status
  * @property Carbon|null $expires_at
@@ -27,6 +28,7 @@ use Solid3d\LaravelTusS3\Helpers\TusFile;
  * @property string|null $patch_lock_owner
  * @property Carbon|null $patch_lock_at
  * @property Carbon|null $completed_at
+ * @property Carbon|null $finished_notified_at
  * @property string|null $owner_type
  * @property string|null $owner_id
  */
@@ -45,6 +47,7 @@ class TusUpload extends Model
         'multipart_upload_id',
         'expected_size',
         'offset',
+        'sha256',
         'next_part_number',
         'status',
         'expires_at',
@@ -53,6 +56,7 @@ class TusUpload extends Model
         'patch_lock_owner',
         'patch_lock_at',
         'completed_at',
+        'finished_notified_at',
         'owner_type',
         'owner_id',
     ];
@@ -69,11 +73,15 @@ class TusUpload extends Model
             'parts' => 'array',
             'patch_lock_at' => 'datetime',
             'completed_at' => 'datetime',
+            'finished_notified_at' => 'datetime',
         ];
     }
 
     public function toTusFile(): TusFile
     {
+        $complete = $this->status === UploadStatus::Completed
+            && $this->offset === $this->expected_size;
+
         return new TusFile(
             id: $this->id,
             path: $this->object_key,
@@ -82,6 +90,10 @@ class TusUpload extends Model
                 'size' => $this->expected_size,
             ],
             disk: $this->disk,
+            // Captured while the bytes streamed through PATCH, so consumers do not
+            // have to read the whole object back just to hash it.
+            sha256: $complete ? $this->sha256 : null,
+            size: $complete ? $this->expected_size : null,
         );
     }
 

@@ -26,8 +26,9 @@ use Throwable;
 
 final class DurableTusUploadStore implements TusUploadStore
 {
-    /** @var array<string, true> */
-    private array $completed = [];
+    private const READ_BUFFER_BYTES = 1_048_576;
+
+    private const SPOOL_MEMORY_BYTES = 2_097_152;
 
     public function __construct(
         private MultipartUploader $uploader,
@@ -100,15 +101,44 @@ final class DurableTusUploadStore implements TusUploadStore
         return $this->uploadOrFail($id)->uploadOwner();
     }
 
+    public function isActive(string $id): bool
+    {
+        $upload = TusUpload::query()->find($id);
+
+        return $upload !== null
+            && ! $upload->status->isTerminal()
+            && ! $upload->isExpired();
+    }
+
+    /**
+     * The claim is a conditional UPDATE rather than per-request memory, so the
+     * notification survives an Octane worker swap and cannot fire twice across
+     * concurrent requests or replicas.
+     */
     public function pullCompleted(string $id): ?TusFile
     {
-        if (! isset($this->completed[$id])) {
+        $claimed = TusUpload::query()
+            ->whereKey($id)
+            ->where('status', UploadStatus::Completed->value)
+            ->whereNull('finished_notified_at')
+            ->update(['finished_notified_at' => now()]) === 1;
+
+        if (! $claimed) {
             return null;
         }
 
-        unset($this->completed[$id]);
+        return TusUpload::query()->findOrFail($id)->toTusFile();
+    }
 
-        return $this->find($id);
+    public function unnotifiedCompleted(int $limit = 100): array
+    {
+        return TusUpload::query()
+            ->where('status', UploadStatus::Completed->value)
+            ->whereNull('finished_notified_at')
+            ->orderBy('completed_at')
+            ->limit(max(1, $limit))
+            ->pluck('id')
+            ->all();
     }
 
     public function offset(string $id): int
@@ -144,8 +174,8 @@ final class DurableTusUploadStore implements TusUploadStore
             throw new FileAppendException(statusCode: 413, message: 'Upload chunk exceeds the configured maximum part size.');
         }
 
-        [$stream, $payload] = $this->bufferBody($body, $length);
-        $this->assertChecksum($checksumAlgorithm, $checksumHash, $payload);
+        [$stream, $rawSha256] = $this->bufferBody($body, $length);
+        $this->assertChecksum($checksumAlgorithm, $checksumHash, $stream, $rawSha256);
 
         $lockOwner = (string) Str::uuid();
         $partNumber = 0;
@@ -231,6 +261,7 @@ final class DurableTusUploadStore implements TusUploadStore
                 $lockOwner,
                 $partNumber,
                 $etag,
+                $rawSha256,
                 &$shouldComplete,
                 &$completedParts,
             ): int {
@@ -262,6 +293,12 @@ final class DurableTusUploadStore implements TusUploadStore
                 $upload->next_part_number = $partNumber + 1;
                 $upload->patch_lock_owner = null;
                 $upload->patch_lock_at = null;
+
+                // sha256 cannot be composed from per-part digests, so it is only
+                // free when the whole object arrived in this single PATCH.
+                if ($expectedOffset === 0 && $upload->offset === $upload->expected_size) {
+                    $upload->sha256 = bin2hex($rawSha256);
+                }
 
                 if ($upload->offset === $upload->expected_size) {
                     $shouldComplete = true;
@@ -377,14 +414,23 @@ final class DurableTusUploadStore implements TusUploadStore
                 }
             });
 
-        // Remove terminal records older than twice the expiration window.
+        // Remove terminal records older than twice the expiration window. A
+        // completed upload whose notification was never claimed must survive, or
+        // the sweep can never deliver FileUploadFinished for it.
         $deleted = TusUpload::query()
-            ->whereIn('status', [
-                UploadStatus::Cancelled->value,
-                UploadStatus::Expired->value,
-                UploadStatus::Completed->value,
-            ])
             ->where('updated_at', '<=', now()->subMinutes($expirationMinutes * 2))
+            ->where(function ($query): void {
+                $query
+                    ->whereIn('status', [
+                        UploadStatus::Cancelled->value,
+                        UploadStatus::Expired->value,
+                    ])
+                    ->orWhere(function ($query): void {
+                        $query
+                            ->where('status', UploadStatus::Completed->value)
+                            ->whereNotNull('finished_notified_at');
+                    });
+            })
             ->delete();
 
         return $cleaned + $deleted;
@@ -461,9 +507,7 @@ final class DurableTusUploadStore implements TusUploadStore
             );
         }
 
-        $completedNow = false;
-
-        DB::transaction(function () use ($id, &$completedNow): void {
+        DB::transaction(function () use ($id): void {
             $locked = TusUpload::query()->whereKey($id)->lockForUpdate()->first();
 
             if ($locked === null || $locked->status === UploadStatus::Completed) {
@@ -476,12 +520,7 @@ final class DurableTusUploadStore implements TusUploadStore
             $locked->patch_lock_owner = null;
             $locked->patch_lock_at = null;
             $locked->save();
-            $completedNow = true;
         }, 5);
-
-        if ($completedNow) {
-            $this->completed[$id] = true;
-        }
     }
 
     private function completeOnce(TusUpload $upload): void
@@ -510,7 +549,6 @@ final class DurableTusUploadStore implements TusUploadStore
         $upload->completed_at = now();
         $upload->multipart_upload_id = null;
         $upload->save();
-        $this->completed[$upload->id] = true;
     }
 
     private function reconcileFromStorage(TusUpload $upload): void
@@ -587,7 +625,6 @@ final class DurableTusUploadStore implements TusUploadStore
         $upload->patch_lock_owner = null;
         $upload->patch_lock_at = null;
         $upload->save();
-        $this->completed[$upload->id] = true;
     }
 
     private function completedObjectExists(TusUpload $upload): bool
@@ -633,8 +670,12 @@ final class DurableTusUploadStore implements TusUploadStore
     }
 
     /**
+     * Spool the chunk to a temp stream and hash it in the same pass. The chunk is
+     * never materialised as a PHP string, so peak memory stays at the spool
+     * threshold instead of one full chunk per concurrent PATCH.
+     *
      * @param  resource  $body
-     * @return array{0: resource, 1: string}
+     * @return array{0: resource, 1: string} Stream plus the raw sha256 of the chunk
      */
     private function bufferBody(mixed $body, int $length): array
     {
@@ -642,33 +683,45 @@ final class DurableTusUploadStore implements TusUploadStore
             throw new FileAppendException(message: 'Upload body must be a stream resource.');
         }
 
-        $stream = fopen('php://temp', 'w+b');
+        $stream = fopen('php://temp/maxmemory:'.self::SPOOL_MEMORY_BYTES, 'w+b');
 
         if ($stream === false) {
             throw new FileAppendException(message: 'Unable to allocate a temporary upload buffer.');
         }
 
-        $copied = stream_copy_to_stream($body, $stream, $length);
+        $context = hash_init('sha256');
+        $copied = 0;
 
-        if ($copied === false || $copied !== $length) {
+        while ($copied < $length) {
+            $chunk = fread($body, min(self::READ_BUFFER_BYTES, $length - $copied));
+
+            if ($chunk === false || $chunk === '') {
+                break;
+            }
+
+            if (fwrite($stream, $chunk) === false) {
+                fclose($stream);
+                throw new FileAppendException(message: 'Unable to buffer the upload chunk.');
+            }
+
+            hash_update($context, $chunk);
+            $copied += strlen($chunk);
+        }
+
+        if ($copied !== $length) {
             fclose($stream);
             throw new FileAppendException(message: 'Unable to read the upload chunk.');
         }
 
         rewind($stream);
-        $payload = stream_get_contents($stream);
 
-        if ($payload === false) {
-            fclose($stream);
-            throw new FileAppendException(message: 'Unable to buffer the upload chunk.');
-        }
-
-        rewind($stream);
-
-        return [$stream, $payload];
+        return [$stream, hash_final($context, true)];
     }
 
-    private function assertChecksum(?string $algorithm, ?string $hash, string $payload): void
+    /**
+     * @param  resource  $stream
+     */
+    private function assertChecksum(?string $algorithm, ?string $hash, mixed $stream, string $rawSha256): void
     {
         if ($algorithm === null || $hash === null) {
             return;
@@ -679,10 +732,36 @@ final class DurableTusUploadStore implements TusUploadStore
         }
 
         $expected = base64_decode($hash, true);
+        $actual = $algorithm === 'sha256'
+            ? $rawSha256
+            : $this->streamHash($stream, $algorithm);
 
-        if ($expected === false || ! hash_equals($expected, hash($algorithm, $payload, true))) {
+        if ($expected === false || ! hash_equals($expected, $actual)) {
             throw new ChecksumMismatchException;
         }
+    }
+
+    /**
+     * @param  resource  $stream
+     */
+    private function streamHash(mixed $stream, string $algorithm): string
+    {
+        rewind($stream);
+        $context = hash_init($algorithm);
+
+        while (! feof($stream)) {
+            $chunk = fread($stream, self::READ_BUFFER_BYTES);
+
+            if ($chunk === false) {
+                throw new FileAppendException(message: 'Unable to read the upload chunk.');
+            }
+
+            hash_update($context, $chunk);
+        }
+
+        rewind($stream);
+
+        return hash_final($context, true);
     }
 
     private function safeAbortMultipart(TusUpload $upload): void

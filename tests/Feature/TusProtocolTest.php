@@ -197,6 +197,9 @@ it('recovers and announces completion during head after a lost database commit',
     $upload->status = 'uploading';
     $upload->multipart_upload_id = 'completed-upload-no-longer-exists';
     $upload->completed_at = null;
+    // A commit lost before completion was recorded never got to claim the
+    // notification either, so recovery still owes one FileUploadFinished.
+    $upload->finished_notified_at = null;
     $upload->save();
     Event::fake([FileUploadFinished::class]);
 
